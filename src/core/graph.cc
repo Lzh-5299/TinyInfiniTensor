@@ -1,10 +1,40 @@
 #include "core/graph.h"
+#include "utils/operator_utils.h"
+#include "core/blob.h"
+#include "operators/transpose.h"
+#include "operators/matmul.h"
 #include <algorithm>
 #include <numeric>
 #include <queue>
 
 namespace infini
 {
+    static bool isTranspose(const Operator &op)
+    {
+        return op->getOpType() == OpType::Transpose;
+    }
+
+    static bool isMatMul(const Operator &op)
+    {
+        return op->getOpType() == OpType::MatMul;
+    }
+
+    // 判断是不是“最后两个维度交换”
+    static bool isSwapLast2Dims(const Operator &op)
+    {
+        // Transpose操作符直接使用getPermute方法获取permute属性
+        auto transOp = std::dynamic_pointer_cast<TransposeObj>(op);
+        if (!transOp) return false;
+        
+        auto perm = transOp->getPermute();
+        int n = perm.size();
+        if (n < 2)
+            return false;
+        for (int i = 0; i < n - 2; ++i)
+            if (perm[i] != i)
+                return false;
+        return perm[n - 1] == n - 2 && perm[n - 2] == n - 1;
+    }
 
     void GraphObj::addOperatorAndConnect(const Operator &op)
     {
@@ -100,12 +130,149 @@ namespace infini
 
     void GraphObj::optimize()
     {
-        // =================================== 作业 ===================================
-        // TODO: 设计一个算法来实现指定的图优化规则
-        // 图优化规则如下：
-        // 1. 去除冗余的算子（例如，两个相邻的算子都是 transpose 算子，且做的是相反的操作，可以将其全部删除）
-        // 2. 合并算子（例如，矩阵乘算子中含有属性transA、transB，如果其输入存在transpose，且对最后两个维度做交换，就可以将transpose融入到矩阵乘算子的属性中去）
-        // =================================== 作业 ===================================
+        bool changed = true;
+
+        while (changed)
+        {
+            changed = false;
+
+            // ===============================
+            // Pass 1: 消除相邻反向 Transpose
+            // ===============================
+            // 使用 while 循环和显式的迭代器控制
+            auto it = ops.begin();
+            while (it != ops.end())
+            {
+                auto op = *it;
+                if (!isTranspose(op))
+                {
+                    ++it;
+                    continue;
+                }
+
+                auto out = op->getOutputs()[0];
+                if (out->getTargets().size() != 1)
+                {
+                    ++it;
+                    continue;
+                }
+
+                auto next = out->getTargets()[0];
+                if (!isTranspose(next))
+                {
+                    ++it;
+                    continue;
+                }
+
+                // op -> tensor -> next
+                auto transOp1 = std::dynamic_pointer_cast<TransposeObj>(op);
+                auto transOp2 = std::dynamic_pointer_cast<TransposeObj>(next);
+                if (!transOp1 || !transOp2)
+                {
+                    ++it;
+                    continue;
+                }
+                
+                auto perm1 = transOp1->getPermute();
+                auto perm2 = transOp2->getPermute();
+
+                // 判断是否互逆
+                bool inverse = true;
+                for (int i = 0; i < (int)perm1.size(); ++i)
+                {
+                    if (perm2[perm1[i]] != i)
+                    {
+                        inverse = false;
+                        break;
+                    }
+                }
+                if (!inverse)
+                {
+                    ++it;
+                    continue;
+                }
+
+                // 重连图
+                auto inTensor = op->getInputs()[0];
+                auto outTensor = next->getOutputs()[0];
+
+                // 所有使用 next 输出的地方，改成用 op 输入
+                for (auto &succ : outTensor->getTargets())
+                {
+                    succ->replaceInput(outTensor, inTensor);
+                    inTensor->addTarget(succ);
+                }
+
+                // 删除中间 tensor 和 op（注意迭代器失效问题）
+                tensors.erase(std::remove(tensors.begin(), tensors.end(), out), tensors.end());
+                tensors.erase(std::remove(tensors.begin(), tensors.end(), outTensor), tensors.end());
+
+                // 删除当前 op 和 next op
+                it = ops.erase(std::remove(ops.begin(), ops.end(), op), ops.end());
+                ops.erase(std::remove(ops.begin(), ops.end(), next), ops.end());
+
+                // 重置迭代器到开始，因为图结构已经改变
+                it = ops.begin();
+                changed = true;
+                break;
+            }
+
+            if (changed)
+                continue;
+
+            // ===============================
+            // Pass 2: Transpose 融合进 MatMul
+            // ===============================
+            // 使用索引循环避免迭代器失效
+            for (size_t idx = 0; idx < ops.size(); ++idx)
+            {
+                auto op = ops[idx];
+                if (!isMatMul(op))
+                    continue;
+
+                auto inputs = op->getInputs();
+                for (int i = 0; i < (int)inputs.size(); ++i)
+                {
+                    auto t = inputs[i];
+                    auto src = t->getSource();
+                    if (!src || !isTranspose(src))
+                        continue;
+
+                    if (!isSwapLast2Dims(src))
+                        continue;
+
+                    // 融合到 MatMul 属性
+                    auto multOp = std::dynamic_pointer_cast<MatmulObj>(op);
+                    if (!multOp) continue;
+                    
+                    if (i == 0)
+                    {
+                        bool transA = multOp->getTransA();
+                        multOp->setTransA(!transA);
+                    }
+                    else if (i == 1)
+                    {
+                        bool transB = multOp->getTransB();
+                        multOp->setTransB(!transB);
+                    }
+
+                    // 重连输入
+                    auto realInput = src->getInputs()[0];
+                    op->replaceInput(t, realInput);
+                    realInput->addTarget(op);
+
+                    // 删除 transpose 操作符和中间 tensor
+                    tensors.erase(std::remove(tensors.begin(), tensors.end(), t), tensors.end());
+                    ops.erase(std::remove(ops.begin(), ops.end(), src), ops.end());
+
+                    changed = true;
+                    break;
+                }
+
+                if (changed)
+                    break;
+            }
+        }
     }
 
     Tensor GraphObj::getTensor(int fuid) const
@@ -145,13 +312,62 @@ namespace infini
 
     void GraphObj::dataMalloc()
     {
-        // topological sorting first
         IT_ASSERT(topo_sort() == true);
 
-        // =================================== 作业 ===================================
-        // TODO：利用 allocator 给计算图分配内存
-        // HINT: 获取分配好的内存指针后，可以调用 tensor 的 setDataBlob 函数给 tensor 绑定内存
-        // =================================== 作业 ===================================
+        // 每个 tensor 的最后使用位置
+        std::unordered_map<Tensor, int> lastUse;
+
+        for (int i = 0; i < (int)ops.size(); ++i)
+        {
+            auto &op = ops[i];
+            for (auto &t : op->getInputs())
+            {
+                lastUse[t] = i;
+            }
+            for (auto &t : op->getOutputs())
+            {
+                lastUse[t] = i;
+            }
+        }
+
+        // tensor -> offset
+        std::unordered_map<Tensor, size_t> addrMap;
+
+        for (int i = 0; i < (int)ops.size(); ++i)
+        {
+            auto &op = ops[i];
+
+            // 给输出 tensor 分配内存
+            for (auto &t : op->getOutputs())
+            {
+                size_t size = t->getBytes();
+                size_t addr = allocator.alloc(size);
+                addrMap[t] = addr;
+            }
+
+            // 释放不再使用的 tensor
+            for (auto &t : op->getInputs())
+            {
+                if (lastUse[t] == i)
+                {
+                    allocator.free(addrMap[t], t->getBytes());
+                }
+            }
+        }
+
+        // 真正申请一块大内存
+        void *base = allocator.getPtr();
+
+        // 绑定 tensor 数据指针
+        for (auto &t : tensors)
+        {
+            if (addrMap.count(t))
+            {
+                char *ptr = static_cast<char *>(base) + addrMap[t];
+                auto blob = make_ref<BlobObj>(runtime, ptr);
+                t->setDataBlob(blob);
+            }
+        }
 
         allocator.info();
     }

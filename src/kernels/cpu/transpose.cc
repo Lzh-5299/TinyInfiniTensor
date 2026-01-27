@@ -26,11 +26,30 @@ class NaiveTranspose : public CpuKernelWithoutConfig {
         auto inPtr = inputs[0]->getRawDataPtr<T *>(),
              outPtr = outputs[0]->getRawDataPtr<T *>();
         // #pragma omp parallel for
-        for (size_t inIdx = 0; inIdx < inSize; ++inIdx) {
-            auto posInput = idx2Pos(inDim, inIdx);
-            int outIdx = 0;
-            for (size_t j = 0, jEnd = perm.size(); j < jEnd; ++j) {
-                outIdx = outIdx * inDim[perm[j]] + posInput[perm[j]];
+        // 计算输出维度
+        Shape outDim(inDim.size());
+        for (size_t i = 0; i < inDim.size(); ++i)
+            outDim[i] = inDim[perm[i]];
+        
+        // 计算输入和输出的strides
+        Shape inStride(inDim.size(), 1);
+        for (int i = inDim.size() - 2; i >= 0; --i)
+            inStride[i] = inStride[i + 1] * inDim[i + 1];
+            
+        Shape outStride(outDim.size(), 1);
+        for (int i = outDim.size() - 2; i >= 0; --i)
+            outStride[i] = outStride[i + 1] * outDim[i + 1];
+        
+        // 更高效的内存访问模式
+        #pragma omp parallel for
+        for (size_t outIdx = 0; outIdx < inSize; ++outIdx) {
+            size_t inIdx = 0;
+            size_t tmp = outIdx;
+            for (size_t i = 0; i < outDim.size(); ++i) {
+                size_t dim = perm[i];
+                size_t coord = tmp / outStride[i];
+                tmp = tmp % outStride[i];
+                inIdx += coord * inStride[dim];
             }
             outPtr[outIdx] = inPtr[inIdx];
         }

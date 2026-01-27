@@ -32,11 +32,22 @@ class NaiveConcat : public CpuKernelWithoutConfig {
             auto inSize = input->size();
             auto inPtr = input->getRawDataPtr<T *>(),
                  outPtr = output->getRawDataPtr<T *>();
+            
+            // 更直观的内存访问模式
+            auto outerSize = 1;
+            for (size_t i = 0; i < (size_t)dim; ++i)
+                outerSize *= iDims[i][i];
+            
+            auto innerSize = localBlockOffset;
+            auto copySize = iDims[i][dim] * blockOffsetInner;
+            
 #pragma omp parallel for
-            for (size_t iOffset = 0; iOffset < inSize; ++iOffset) {
-                auto oOffset = iOffset % localBlockOffset + innerOffset +
-                               iOffset / localBlockOffset * blockOffset;
-                outPtr[oOffset] = inPtr[iOffset];
+            for (size_t outer = 0; outer < outerSize; ++outer) {
+                for (size_t inner = 0; inner < innerSize; ++inner) {
+                    auto inIdx = outer * innerSize + inner;
+                    auto outIdx = outer * blockOffset + inner + innerOffset;
+                    outPtr[outIdx] = inPtr[inIdx];
+                }
             }
         }
     }

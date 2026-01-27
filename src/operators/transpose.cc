@@ -29,12 +29,25 @@ namespace infini
         auto output_dim = input_dim;
         int rank = A->getRank();
 
-        // =================================== 作业 ===================================
-        // TODO：修改 output_dim，返回正确的 transpose 后的 shape
-        // REF: https://onnx.ai/onnx/operators/onnx__Transpose.html#transpose-21
-        // =================================== 作业 ===================================
+        IT_ASSERT((int)transposePermute.size() == rank);
 
-        return std::nullopt;
+        // 检查 perm 合法性（0 ~ rank-1 且不重复）
+        std::vector<bool> used(rank, false);
+        for (int i = 0; i < rank; ++i)
+        {
+            int p = transposePermute[i];
+            IT_ASSERT(p >= 0 && p < rank);
+            IT_ASSERT(!used[p]);
+            used[p] = true;
+        }
+
+        // 执行维度重排
+        for (int i = 0; i < rank; ++i)
+        {
+            output_dim[i] = input_dim[transposePermute[i]];
+        }
+
+        return std::vector<Shape>{output_dim};
     }
 
     std::string TransposeObj::toString() const

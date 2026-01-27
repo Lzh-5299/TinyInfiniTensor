@@ -83,11 +83,28 @@ namespace infini
                 IT_TODO_HALT();
             }
 
+            // 简化广播逻辑
+            #pragma omp parallel for
             for (size_t i = 0; i < n; ++i)
             {
                 auto shapeIndexC = locate_index(i, shapeC);
-                auto indexA = delocate_index(shapeIndexC, a, strideA);
-                auto indexB = delocate_index(shapeIndexC, b, strideB);
+                
+                // 计算输入A的索引
+                size_t indexA = 0;
+                for (size_t j = 0; j < shapeIndexC.size(); ++j) {
+                    auto dim = a[j];
+                    auto coord = (dim > 1) ? shapeIndexC[j] % dim : 0;
+                    indexA = indexA * dim + coord;
+                }
+                
+                // 计算输入B的索引
+                size_t indexB = 0;
+                for (size_t j = 0; j < shapeIndexC.size(); ++j) {
+                    auto dim = b[j];
+                    auto coord = (dim > 1) ? shapeIndexC[j] % dim : 0;
+                    indexB = indexB * dim + coord;
+                }
+                
                 outptr[i] = _doCompute(inptr0[indexA], inptr1[indexB]);
             }
         }
