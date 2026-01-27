@@ -9,6 +9,11 @@
 #include <unordered_set>
 
 namespace infini {
+  struct Block {
+    size_t offset;
+    size_t size;
+    bool free;
+  };
   class Allocator
   {
   private:
@@ -54,6 +59,7 @@ namespace infini {
   private:
     // function: memory alignment, rouned up
     // return: size of the aligned memory block
+    std::list<Block> blocks;
     size_t getAlignedSize(size_t size);
   };
 }

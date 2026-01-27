@@ -1,5 +1,6 @@
 #include "core/allocator.h"
 #include <utility>
+#include <list>
 
 namespace infini
 {
@@ -26,14 +27,49 @@ namespace infini
     size_t Allocator::alloc(size_t size)
     {
         IT_ASSERT(this->ptr == nullptr);
-        // pad the size to the multiple of alignment
-        size = this->getAlignedSize(size);
+        size = getAlignedSize(size);
 
-        // =================================== 作业 ===================================
-        // TODO: 设计一个算法来分配内存，返回起始地址偏移量
-        // =================================== 作业 ===================================
+        // First-fit 查找空闲块
+        for (auto it = blocks.begin(); it != blocks.end(); ++it)
+        {
+            if (it->free && it->size >= size)
+            {
+                size_t addr = it->offset;
 
-        return 0;
+                // 如果块足够大，进行切分
+                if (it->size > size)
+                {
+                    Block rest;
+                    rest.offset = it->offset + size;
+                    rest.size = it->size - size;
+                    rest.free = true;
+
+                    it->size = size;
+                    blocks.insert(std::next(it), rest);
+                }
+
+                it->free = false;
+                return addr;
+            }
+        }
+
+        // 没有空闲块，从尾部分配
+        size_t addr = this->used;
+
+        Block block;
+        block.offset = addr;
+        block.size = size;
+        block.free = false;
+
+        blocks.push_back(block);
+
+        this->used += size;
+        if (this->used > this->peak)
+        {
+            this->peak = this->used;
+        }
+
+        return addr;
     }
 
     void Allocator::free(size_t addr, size_t size)
@@ -41,9 +77,50 @@ namespace infini
         IT_ASSERT(this->ptr == nullptr);
         size = getAlignedSize(size);
 
-        // =================================== 作业 ===================================
-        // TODO: 设计一个算法来回收内存
-        // =================================== 作业 ===================================
+        for (auto it = blocks.begin(); it != blocks.end(); ++it)
+        {
+            if (it->offset == addr)
+            {
+                IT_ASSERT(!it->free);
+                it->free = true;
+
+                // 向后合并
+                auto next = std::next(it);
+                if (next != blocks.end() && next->free)
+                {
+                    it->size += next->size;
+                    blocks.erase(next);
+                }
+
+                // 向前合并
+                if (it != blocks.begin())
+                {
+                    auto prev = std::prev(it);
+                    if (prev->free)
+                    {
+                        prev->size += it->size;
+                        blocks.erase(it);
+                    }
+                }
+
+                break;
+            }
+        }
+
+        // 如果尾块是 free，回收 used
+        while (!blocks.empty())
+        {
+            auto last = std::prev(blocks.end());
+            if (last->free)
+            {
+                this->used -= last->size;
+                blocks.erase(last);
+            }
+            else
+            {
+                break;
+            }
+        }
     }
 
     void *Allocator::getPtr()
