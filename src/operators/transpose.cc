@@ -34,7 +34,17 @@ namespace infini
         // REF: https://onnx.ai/onnx/operators/onnx__Transpose.html#transpose-21
         // =================================== 作业 ===================================
 
-        return std::nullopt;
+        // Transpose 根据 permute 向量重新排列维度
+        // 如果 permute = [2, 0, 1]，输入 shape = [A, B, C]
+        // 则输出 shape = [C, A, B]
+        // 即 output_dim[i] = input_dim[permute[i]]
+        
+        for (int i = 0; i < rank; ++i)
+        {
+            output_dim[i] = input_dim[transposePermute[i]];
+        }
+
+        return {{output_dim}};
     }
 
     std::string TransposeObj::toString() const

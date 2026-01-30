@@ -4,6 +4,8 @@
 #include "core/tensor.h"
 #include <algorithm>
 #include <cstdint>
+#include "operators/transpose.h" 
+#include "operators/matmul.h"
 
 namespace infini
 {

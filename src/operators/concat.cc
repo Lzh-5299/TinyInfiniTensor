@@ -18,6 +18,13 @@ optional<vector<Shape>> ConcatObj::inferShape(const TensorVec &inputs) {
     // REF: https://onnx.ai/onnx/operators/onnx__Concat.html#concat-13
     // =================================== 作业 ===================================
 
+    // 沿 dim 维度累加所有输入的大小
+    // dims 已经初始化为 inputs[0] 的形状
+    // 需要把其他输入在 dim 维度上的大小加上去
+    for (size_t i = 1; i < inputs.size(); ++i) {
+        dims[dim] += inputs[i]->getDims()[dim];
+    }
+
     return {{dims}};
 }
 
